@@ -1,79 +1,61 @@
-# MEK Cloud Mobile v0.2.0
+# MEK Cloud Mobile v0.3.0
 
-Versão inicial do WhatsApp Engine do MEK Cloud Mobile.
+Motor WhatsApp persistente para o ecossistema MEK, com sessão em PostgreSQL e API própria para integração com o MEK ERP.
 
-## O que esta versão faz
+## O que entra na v0.3.0
 
-- mantém o backend Node.js online na Northflank;
-- testa PostgreSQL em `/health`;
-- conecta ao WhatsApp via QR Code;
-- não usa Chromium, Selenium ou Android virtual;
-- persiste credenciais e Signal keys no PostgreSQL;
-- tenta reconectar automaticamente quando a conexão cai;
-- restaura a sessão após reinício do container;
-- protege conectar, QR e logout com `ADMIN_TOKEN`;
-- não implementa disparos automáticos nesta versão.
-
-## Endpoints
-
-### Públicos
-
-- `/`
-- `/health`
-- `/api/status`
-
-### Protegidos por `Authorization: Bearer <ADMIN_TOKEN>`
-
-- `GET /api/admin/verify`
-- `GET /api/whatsapp/admin-status`
-- `GET /api/whatsapp/qr`
-- `POST /api/whatsapp/connect`
-- `POST /api/whatsapp/logout`
+- Sessão WhatsApp persistente no PostgreSQL.
+- Pareamento por código ou QR Code.
+- API de mensagens com `API_TOKEN` separado do `ADMIN_TOKEN`.
+- Envio de mensagens de texto.
+- `requestId` para idempotência e proteção contra duplicidade.
+- Histórico de mensagens de entrada e saída no PostgreSQL.
+- Registro de status: PENDING, SENT, SERVER_ACK, DELIVERED, READ, PLAYED e ERROR quando disponíveis.
+- Base pronta para o MEK AI Core na v0.4.0.
 
 ## Variáveis de ambiente
 
-### Obrigatórias
+- `DATABASE_URL` — obrigatório.
+- `ADMIN_TOKEN` — protege o painel administrativo e pareamento.
+- `API_TOKEN` — protege a API usada pelo ERP/integrações.
+- `WHATSAPP_SESSION_ID` — opcional; padrão `primary`.
+- `PORT` — padrão `8080`.
 
-`DATABASE_URL`
+## API v1
 
-Já deve estar sendo injetada pelo Secret Group da Northflank.
+Todas as rotas abaixo usam:
 
-`ADMIN_TOKEN`
+```http
+Authorization: Bearer SEU_API_TOKEN
+Content-Type: application/json
+```
 
-Crie um token forte e aleatório, com pelo menos 32 caracteres, e armazene-o
-somente no Secret Group/Environment da Northflank.
+### Status da API
 
-NUNCA coloque o token no GitHub.
+`GET /api/v1/status`
 
-### Opcional
+### Enviar texto
 
-`WHATSAPP_SESSION_ID`
+`POST /api/v1/messages/text`
 
-Padrão: `primary`.
+```json
+{
+  "phone": "5521999999999",
+  "message": "Olá! Sua reserva MEK foi confirmada.",
+  "requestId": "reserva-641-confirmacao-1"
+}
+```
 
-## Banco de dados
+O `requestId` é recomendado e deve ser reutilizado em uma repetição da mesma operação. Se a requisição for repetida, o servidor devolve o registro anterior em vez de enviar a mensagem novamente.
 
-As tabelas abaixo são criadas automaticamente:
+### Consultar uma mensagem
 
-- `mek_whatsapp_auth_creds`
-- `mek_whatsapp_auth_keys`
-- `mek_whatsapp_state`
+`GET /api/v1/messages/reserva-641-confirmacao-1`
 
-Credenciais e Signal keys são material sensível de autenticação. Não exponha
-o conteúdo dessas tabelas e mantenha o PostgreSQL privado.
+### Histórico
 
-## Primeiro uso
+`GET /api/v1/messages?phone=5521999999999&direction=OUTBOUND&limit=50`
 
-1. Faça deploy da v0.2.0.
-2. Configure `ADMIN_TOKEN` na Northflank.
-3. Abra a URL pública do `mek-mobile-engine`.
-4. Digite o mesmo `ADMIN_TOKEN` no painel.
-5. Clique em `CONECTAR WHATSAPP`.
-6. Escaneie o QR Code em WhatsApp → Aparelhos conectados → Conectar um aparelho.
-7. Depois de conectado, a sessão será salva no PostgreSQL.
+## Próxima fase — v0.4.0
 
-## Observação importante
-
-Baileys é uma integração não oficial baseada no protocolo do WhatsApp Web.
-Use apenas de forma legítima, especialmente com contatos que tenham autorizado
-o recebimento de mensagens. Não use para spam ou envio abusivo.
+O histórico criado nesta versão será usado pelo MEK AI Core para interpretar conversas, manter contexto por cliente e acionar ferramentas do ERP, agenda, contratos e cobranças.

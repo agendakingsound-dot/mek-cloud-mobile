@@ -1,27 +1,31 @@
-MEK CLOUD MOBILE v0.2.0 - ATUALIZAÇÃO RÁPIDA
+MEK CLOUD MOBILE v0.3.0 - MESSAGING API
 
+ATUALIZACAO
 1. Extraia este ZIP.
-2. No GitHub, abra:
-   agendakingsound-dot/mek-cloud-mobile
-3. Use Add file > Upload files.
-4. Envie TODOS os arquivos desta pasta.
-5. Confirme a substituição dos arquivos existentes.
-6. Commit:
-   MEK Cloud Mobile v0.2.0 - WhatsApp Engine
-7. Como CI + CD já estão ativos, aguarde a Northflank:
-   GitHub -> Build -> Deploy.
+2. No GitHub abra agendakingsound-dot/mek-cloud-mobile.
+3. Add file > Upload files.
+4. Envie TODOS os arquivos extraidos.
+5. Confirme substituicao dos arquivos existentes e inclusao de message-store.js.
+6. Commit direto na branch main com:
+   MEK Cloud Mobile v0.3.0 - Messaging API
+7. Nao clique em Reconstruir na Northflank. O CI/CD deve executar automaticamente.
 
-ARQUIVOS PRINCIPAIS:
-- Dockerfile
-- package.json
-- server.js
-- db.js
-- auth-store.js
-- whatsapp.js
-- README.md
-- .dockerignore
-- .gitignore
+DEPOIS DO DEPLOY
+Crie no mesmo Secret Group da Northflank uma nova variavel:
+API_TOKEN=<um segredo forte e diferente do ADMIN_TOKEN>
 
-DEPOIS DO DEPLOY:
-Configure ADMIN_TOKEN na Northflank.
-Não grave esse token no GitHub.
+Nao publique nem envie esse token no GitHub.
+
+TESTE DA API
+GET /api/v1/status
+Authorization: Bearer <API_TOKEN>
+
+POST /api/v1/messages/text
+Authorization: Bearer <API_TOKEN>
+Content-Type: application/json
+
+{
+  "phone": "5521999999999",
+  "message": "Teste MEK Cloud Mobile v0.3.0",
+  "requestId": "teste-v030-001"
+}

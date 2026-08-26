@@ -21,10 +21,41 @@ function sanitizePhone(jid) {
   return String(jid).split("@")[0].split(":")[0] || null;
 }
 
+function extractMessageContent(message) {
+  const content = message?.message || {};
+
+  if (content.conversation) return { type: "TEXT", text: content.conversation };
+  if (content.extendedTextMessage?.text) return { type: "TEXT", text: content.extendedTextMessage.text };
+  if (content.imageMessage) return { type: "IMAGE", text: content.imageMessage.caption || null };
+  if (content.videoMessage) return { type: "VIDEO", text: content.videoMessage.caption || null };
+  if (content.documentMessage) return { type: "DOCUMENT", text: content.documentMessage.fileName || null };
+  if (content.audioMessage) return { type: "AUDIO", text: null };
+  if (content.stickerMessage) return { type: "STICKER", text: null };
+  if (content.contactMessage) return { type: "CONTACT", text: content.contactMessage.displayName || null };
+  if (content.locationMessage) return { type: "LOCATION", text: null };
+  if (content.buttonsResponseMessage?.selectedDisplayText) return { type: "TEXT", text: content.buttonsResponseMessage.selectedDisplayText };
+  if (content.listResponseMessage?.title) return { type: "TEXT", text: content.listResponseMessage.title };
+
+  const firstType = Object.keys(content)[0] || "UNKNOWN";
+  return { type: String(firstType).replace(/Message$/, "").toUpperCase(), text: null };
+}
+
+function mapDeliveryStatus(status) {
+  const value = Number(status);
+  if (value === 0) return "ERROR";
+  if (value === 1) return "PENDING";
+  if (value === 2) return "SERVER_ACK";
+  if (value === 3) return "DELIVERED";
+  if (value === 4) return "READ";
+  if (value === 5) return "PLAYED";
+  return null;
+}
+
 export class WhatsAppManager {
-  constructor(pool, authStore) {
+  constructor(pool, authStore, messageStore = null) {
     this.pool = pool;
     this.authStore = authStore;
+    this.messageStore = messageStore;
     this.socket = null;
     this.generation = 0;
     this.reconnectTimer = null;
@@ -177,16 +208,77 @@ export class WhatsAppManager {
       }
     });
 
-    sock.ev.on("messages.upsert", ({ messages, type }) => {
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
+
       for (const message of messages || []) {
-        if (!message?.key?.fromMe) {
-          console.log("[WHATSAPP] Mensagem recebida:", message?.key?.remoteJid || "origem desconhecida");
+        if (message?.key?.fromMe) continue;
+
+        const remoteJid = message?.key?.remoteJid || "";
+        const phone = sanitizePhone(remoteJid);
+        const extracted = extractMessageContent(message);
+
+        console.log("[WHATSAPP] Mensagem recebida:", remoteJid || "origem desconhecida");
+
+        if (this.messageStore && remoteJid) {
+          try {
+            await this.messageStore.recordInbound({
+              remoteJid,
+              phone,
+              whatsappMessageId: message?.key?.id || null,
+              messageType: extracted.type,
+              content: extracted.text,
+              rawPayload: {
+                key: {
+                  id: message?.key?.id || null,
+                  remoteJid,
+                  participant: message?.key?.participant || null,
+                },
+                pushName: message?.pushName || null,
+                messageTimestamp: message?.messageTimestamp || null,
+              },
+            });
+          } catch (error) {
+            console.error("[WHATSAPP][INBOUND_STORE]", error.message);
+          }
+        }
+      }
+    });
+
+    sock.ev.on("messages.update", async (updates) => {
+      if (!this.messageStore) return;
+
+      for (const item of updates || []) {
+        const whatsappMessageId = item?.key?.id || null;
+        const status = mapDeliveryStatus(item?.update?.status);
+        if (!whatsappMessageId || !status) continue;
+
+        try {
+          await this.messageStore.updateDeliveryByWhatsAppId(whatsappMessageId, status);
+        } catch (error) {
+          console.error("[WHATSAPP][DELIVERY_STORE]", error.message);
         }
       }
     });
 
     return this.getAdminStatus();
+  }
+
+  async sendText({ remoteJid, text }) {
+    if (this.status !== "CONNECTED" || !this.socket) {
+      const error = new Error("WhatsApp não está conectado.");
+      error.code = "WHATSAPP_NOT_CONNECTED";
+      throw error;
+    }
+
+    const result = await this.socket.sendMessage(remoteJid, { text });
+
+    return {
+      id: result?.key?.id || null,
+      remoteJid: result?.key?.remoteJid || remoteJid,
+      fromMe: Boolean(result?.key?.fromMe),
+      timestamp: new Date().toISOString(),
+    };
   }
 
   async logoutAndClear() {

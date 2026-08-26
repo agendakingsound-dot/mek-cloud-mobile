@@ -1,12 +1,12 @@
 {
   "name": "mek-cloud-mobile",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "MEK Cloud Mobile - WhatsApp Engine com sessão persistente em PostgreSQL",
+  "description": "MEK Cloud Mobile - WhatsApp Engine com Messaging API, idempotência e histórico PostgreSQL",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check db.js && node --check auth-store.js && node --check whatsapp.js"
+    "check": "node --check server.js && node --check db.js && node --check auth-store.js && node --check whatsapp.js && node --check message-store.js"
   },
   "engines": {
     "node": ">=20"

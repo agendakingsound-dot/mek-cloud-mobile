@@ -3,13 +3,16 @@ import express from "express";
 import { createPool, databaseStatus, ensureSchema } from "./db.js";
 import { PostgresAuthStore } from "./auth-store.js";
 import { WhatsAppManager } from "./whatsapp.js";
+import { MessageStore, generateRequestId, normalizePhone, phoneToJid } from "./message-store.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
 const ADMIN_TOKEN = String(process.env.ADMIN_TOKEN || "");
+const API_TOKEN = String(process.env.API_TOKEN || "");
 const SESSION_ID = String(process.env.WHATSAPP_SESSION_ID || "primary");
 const startedAt = new Date();
 const pool = createPool();
+const messageStore = pool ? new MessageStore(pool) : null;
 let schemaReady = false;
 let whatsappReady = false;
 let whatsapp = null;
@@ -52,6 +55,33 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireApi(req, res, next) {
+  if (!API_TOKEN) {
+    return res.status(503).json({
+      error: "API_TOKEN_NOT_CONFIGURED",
+      message: "Defina API_TOKEN no Secret Group/Environment da Northflank.",
+    });
+  }
+
+  const authorization = req.get("authorization") || "";
+  const expected = `Bearer ${API_TOKEN}`;
+
+  if (!constantTimeEqual(authorization, expected)) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  next();
+}
+
+function validateRequestId(value) {
+  const requestId = String(value || "").trim();
+  if (!requestId) return generateRequestId();
+  if (requestId.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(requestId)) {
+    throw new Error("INVALID_REQUEST_ID");
+  }
+  return requestId;
+}
+
 function sanitizePairingPhone(value) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -85,7 +115,7 @@ async function bootstrapDatabaseAndWhatsApp() {
 
     if (!whatsappReady) {
       const authStore = new PostgresAuthStore(pool, SESSION_ID);
-      whatsapp = new WhatsAppManager(pool, authStore);
+      whatsapp = new WhatsAppManager(pool, authStore, messageStore);
       whatsappReady = true;
       await whatsapp.initialize();
     }
@@ -110,7 +140,7 @@ app.get("/health", async (_req, res) => {
 
   res.status(database.connected ? 200 : 503).json({
     service: "MEK Cloud Mobile",
-    version: "0.2.0",
+    version: "0.3.0",
     engine: "ONLINE",
     database,
     schemaReady,
@@ -124,7 +154,7 @@ app.get("/api/status", async (_req, res) => {
 
   res.json({
     name: "MEK Cloud Mobile",
-    version: "0.2.0",
+    version: "0.3.0",
     engine: {
       status: "ONLINE",
       uptimeSeconds: uptimeSeconds(),
@@ -140,9 +170,115 @@ app.get("/api/status", async (_req, res) => {
           lastConnectedAt: null,
         },
     adminConfigured: Boolean(ADMIN_TOKEN),
+    apiConfigured: Boolean(API_TOKEN),
+    messagingApi: true,
     pairingCodeSupported: true,
     timestamp: new Date().toISOString(),
   });
+});
+
+app.get("/api/v1/status", requireApi, (_req, res) => {
+  res.json({
+    ok: true,
+    version: "0.3.0",
+    whatsapp: whatsapp ? whatsapp.getPublicStatus() : { status: "INITIALIZING", connected: false },
+    databaseReady: schemaReady,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post("/api/v1/messages/text", requireApi, async (req, res) => {
+  if (!messageStore || !whatsapp) {
+    return res.status(503).json({ error: "MESSAGING_NOT_READY" });
+  }
+
+  const text = String(req.body?.message || req.body?.text || "").trim();
+
+  if (!text || text.length > 4000) {
+    return res.status(400).json({
+      error: "INVALID_MESSAGE",
+      message: "A mensagem deve conter entre 1 e 4000 caracteres.",
+    });
+  }
+
+  let phone;
+  let requestId;
+
+  try {
+    phone = normalizePhone(req.body?.phone);
+    requestId = validateRequestId(req.body?.requestId);
+  } catch (error) {
+    if (error.message === "INVALID_PHONE_NUMBER") {
+      return res.status(400).json({ error: "INVALID_PHONE_NUMBER" });
+    }
+    return res.status(400).json({ error: "INVALID_REQUEST_ID" });
+  }
+
+  const remoteJid = phoneToJid(phone);
+
+  try {
+    const reservation = await messageStore.reserveOutbound({
+      requestId,
+      phone,
+      remoteJid,
+      content: text,
+    });
+
+    if (reservation.duplicate) {
+      return res.status(200).json({
+        ok: reservation.message?.status !== "ERROR",
+        duplicate: true,
+        requestId,
+        message: reservation.message,
+      });
+    }
+
+    const sendResult = await whatsapp.sendText({ remoteJid, text });
+    const stored = await messageStore.markSent(requestId, sendResult.id, sendResult);
+
+    return res.status(201).json({
+      ok: true,
+      duplicate: false,
+      requestId,
+      whatsappMessageId: sendResult.id,
+      phone,
+      status: stored?.status || "SENT",
+      timestamp: sendResult.timestamp,
+    });
+  } catch (error) {
+    console.error("[MESSAGING][SEND]", error.message);
+    try { await messageStore.markError(requestId, error); } catch {}
+
+    const statusCode = error.code === "WHATSAPP_NOT_CONNECTED" ? 503 : 500;
+    return res.status(statusCode).json({
+      ok: false,
+      requestId,
+      error: error.code || "SEND_FAILED",
+      message: error.message,
+    });
+  }
+});
+
+app.get("/api/v1/messages/:requestId", requireApi, async (req, res) => {
+  if (!messageStore) return res.status(503).json({ error: "MESSAGING_NOT_READY" });
+  const item = await messageStore.getByRequestId(String(req.params.requestId || ""));
+  if (!item) return res.status(404).json({ error: "MESSAGE_NOT_FOUND" });
+  res.json({ ok: true, message: item });
+});
+
+app.get("/api/v1/messages", requireApi, async (req, res) => {
+  if (!messageStore) return res.status(503).json({ error: "MESSAGING_NOT_READY" });
+
+  try {
+    const items = await messageStore.list({
+      phone: req.query.phone || null,
+      direction: req.query.direction || null,
+      limit: req.query.limit || 50,
+    });
+    res.json({ ok: true, count: items.length, messages: items });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "INVALID_QUERY" });
+  }
 });
 
 app.get("/api/admin/verify", requireAdmin, (_req, res) => {
@@ -292,7 +428,7 @@ app.get("/", (_req, res) => {
   <main class="wrap">
     <section class="card">
       <h1>MEK CLOUD MOBILE</h1>
-      <p class="subtitle">WhatsApp Engine · v0.2.0 · Pairing Code Hotfix</p>
+      <p class="subtitle">WhatsApp Engine · v0.3.0 · Messaging API</p>
       <div class="row"><span class="label">Engine</span><span id="engineStatus" class="status neutral">CARREGANDO</span></div>
       <div class="row"><span class="label">Database</span><span id="databaseStatus" class="status neutral">CARREGANDO</span></div>
       <div class="row"><span class="label">WhatsApp</span><span id="whatsappStatus" class="status neutral">CARREGANDO</span></div>
@@ -626,10 +762,12 @@ app.use((_req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[MEK] Cloud Mobile v0.2.0 online na porta ${PORT}`);
+  console.log(`[MEK] Cloud Mobile v0.3.0 online na porta ${PORT}`);
   console.log(`[MEK] DATABASE_URL: ${pool ? "configurada" : "não configurada"}`);
   console.log(`[MEK] ADMIN_TOKEN: ${ADMIN_TOKEN ? "configurado" : "não configurado"}`);
+  console.log(`[MEK] API_TOKEN: ${API_TOKEN ? "configurado" : "não configurado"}`);
   console.log("[MEK] Pairing Code: habilitado");
+  console.log("[MEK] Messaging API v1: habilitada");
 });
 
 async function gracefulShutdown(signal) {

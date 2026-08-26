@@ -58,6 +58,39 @@ export async function ensureSchema(pool) {
     CREATE INDEX IF NOT EXISTS idx_mek_whatsapp_auth_keys_session_category
     ON mek_whatsapp_auth_keys (session_id, category)
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mek_whatsapp_messages (
+      id BIGSERIAL PRIMARY KEY,
+      request_id TEXT UNIQUE,
+      direction TEXT NOT NULL CHECK (direction IN ('INBOUND', 'OUTBOUND')),
+      remote_jid TEXT NOT NULL,
+      phone TEXT,
+      whatsapp_message_id TEXT UNIQUE,
+      message_type TEXT NOT NULL DEFAULT 'TEXT',
+      content TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      error_code TEXT,
+      error_message TEXT,
+      raw_payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at TIMESTAMPTZ,
+      received_at TIMESTAMPTZ,
+      delivered_at TIMESTAMPTZ,
+      read_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_mek_whatsapp_messages_phone_created
+    ON mek_whatsapp_messages (phone, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_mek_whatsapp_messages_direction_created
+    ON mek_whatsapp_messages (direction, created_at DESC)
+  `);
 }
 
 export async function databaseStatus(pool) {

@@ -9,7 +9,7 @@ RUN apk add --no-cache git openssh-client
 COPY package.json ./
 RUN npm install --omit=dev
 
-COPY server.js db.js auth-store.js whatsapp.js ./
+COPY server.js db.js auth-store.js whatsapp.js message-store.js ./
 
 ENV NODE_ENV=production
 ENV PORT=8080
