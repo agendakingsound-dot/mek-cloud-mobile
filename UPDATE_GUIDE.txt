@@ -1,0 +1,27 @@
+MEK CLOUD MOBILE v0.2.0 - ATUALIZAÇÃO RÁPIDA
+
+1. Extraia este ZIP.
+2. No GitHub, abra:
+   agendakingsound-dot/mek-cloud-mobile
+3. Use Add file > Upload files.
+4. Envie TODOS os arquivos desta pasta.
+5. Confirme a substituição dos arquivos existentes.
+6. Commit:
+   MEK Cloud Mobile v0.2.0 - WhatsApp Engine
+7. Como CI + CD já estão ativos, aguarde a Northflank:
+   GitHub -> Build -> Deploy.
+
+ARQUIVOS PRINCIPAIS:
+- Dockerfile
+- package.json
+- server.js
+- db.js
+- auth-store.js
+- whatsapp.js
+- README.md
+- .dockerignore
+- .gitignore
+
+DEPOIS DO DEPLOY:
+Configure ADMIN_TOKEN na Northflank.
+Não grave esse token no GitHub.

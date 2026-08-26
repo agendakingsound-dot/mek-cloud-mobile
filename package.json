@@ -1,17 +1,21 @@
 {
   "name": "mek-cloud-mobile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "MEK Cloud Mobile - engine inicial para Northflank",
+  "description": "MEK Cloud Mobile - WhatsApp Engine com sessão persistente em PostgreSQL",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js && node --check db.js && node --check auth-store.js && node --check whatsapp.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
     "express": "^5.1.0",
-    "pg": "^8.13.1"
+    "pg": "^8.16.3",
+    "pino": "^9.9.0",
+    "qrcode": "^1.5.4"
   }
 }

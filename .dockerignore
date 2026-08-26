@@ -1,7 +1,9 @@
 node_modules
-npm-debug.log
+npm-debug.log*
 .git
 .gitignore
 README.md
+UPDATE_GUIDE.txt
 .env
 .env.*
+*.zip
