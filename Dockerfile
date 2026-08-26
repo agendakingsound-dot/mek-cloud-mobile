@@ -2,6 +2,10 @@ FROM node:22-alpine
 
 WORKDIR /app
 
+# Baileys possui dependências instaladas via Git.
+# A imagem Alpine é mínima e não inclui o executável git por padrão.
+RUN apk add --no-cache git openssh-client
+
 COPY package.json ./
 RUN npm install --omit=dev
 
