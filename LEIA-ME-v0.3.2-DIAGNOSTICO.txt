@@ -1,0 +1,47 @@
+MEK CLOUD MOBILE v0.3.2 - DIAGNOSTICO LID / SIGNAL
+
+OBJETIVO
+Diagnosticar o envio que aparece no celular emissor, nao sincroniza no WhatsApp Web emissor e chega como "Aguardando mensagem" no receptor.
+
+ESTA VERSAO NAO MUDA:
+- Baileys 6.7.24
+- package.json
+- banco PostgreSQL
+- auth-store.js
+- message-store.js
+- server.js
+- tokens ou secrets
+- sessao do WhatsApp
+- logica de sendMessage
+
+ALTERA SOMENTE:
+- whatsapp.js
+
+O QUE SERA REGISTRADO NOS LOGS NORTHFLANK
+Linhas iniciadas por [WA-DIAG], incluindo:
+- SEND_BEGIN
+- SEND_RESULT
+- PN_LID_MAPPING
+- MESSAGE_UPSERT
+- MESSAGE_UPDATE
+- MESSAGE_RECEIPT
+- ON_WHATSAPP_AFTER_SEND
+- USYNC_DEVICES_AFTER_SEND
+- RETRY_REQUEST / RETRY_CACHE_HIT / RETRY_DB_HIT / RETRY_MISS
+
+PRIVACIDADE
+Numeros e LIDs sao mascarados nos logs, preservando apenas os ultimos 4 caracteres e o dominio (@s.whatsapp.net ou @lid).
+
+PROCEDIMENTO
+1. Substituir apenas whatsapp.js no GitHub.
+2. Commit sugerido:
+   MEK Cloud Mobile v0.3.2 - Diagnostico LID Signal
+3. Aguardar build e deploy na Northflank.
+4. NAO desconectar nem parear novamente.
+5. Confirmar WhatsApp CONNECTED.
+6. Abrir os logs da implantacao atual.
+7. Fazer UM unico envio pela API para o mesmo numero receptor.
+8. Tirar print das linhas [WA-DIAG] geradas desde SEND_BEGIN ate USYNC_DEVICES_AFTER_SEND e de qualquer RETRY_REQUEST que apareca nos segundos seguintes.
+
+IMPORTANTE
+O getUSyncDevices de diagnostico e executado somente DEPOIS do sendMessage para nao alterar a resolucao de dispositivos usada pelo envio que estamos medindo.

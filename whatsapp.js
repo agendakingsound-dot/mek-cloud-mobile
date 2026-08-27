@@ -6,6 +6,8 @@ import makeWASocket, {
 import pino from "pino";
 import QRCode from "qrcode";
 
+// v0.3.2 DIAGNOSTICO: mantém o Baileys 6.7.24 e o comportamento atual.
+// A única finalidade desta versão é registrar o caminho PN/LID/Signal do envio.
 const logger = pino({ level: "silent" });
 
 class SimpleCache {
@@ -46,6 +48,57 @@ function extractStatusCode(error) {
 function sanitizePhone(jid) {
   if (!jid) return null;
   return String(jid).split("@")[0].split(":")[0] || null;
+}
+
+// Mascara números/LIDs para que screenshots dos logs não exponham os identificadores completos.
+function maskJid(jid) {
+  if (!jid) return null;
+
+  const raw = String(jid);
+  const at = raw.lastIndexOf("@");
+
+  if (at < 0) {
+    const digits = raw.replace(/\D/g, "");
+    return digits ? `***${digits.slice(-4)}` : raw;
+  }
+
+  const local = raw.slice(0, at);
+  const server = raw.slice(at + 1);
+  const colon = local.indexOf(":");
+  const user = colon >= 0 ? local.slice(0, colon) : local;
+  const device = colon >= 0 ? local.slice(colon + 1) : null;
+  const suffix = user.length > 4 ? user.slice(-4) : user;
+
+  return `***${suffix}${device ? `:${device}` : ""}@${server}`;
+}
+
+function diag(event, payload = {}) {
+  try {
+    console.log(`[WA-DIAG][${event}] ${JSON.stringify(payload)}`);
+  } catch {
+    console.log(`[WA-DIAG][${event}]`, payload);
+  }
+}
+
+function summarizeKey(key = {}) {
+  return {
+    id: key?.id || null,
+    fromMe: Boolean(key?.fromMe),
+    remoteJid: maskJid(key?.remoteJid),
+    remoteJidAlt: maskJid(key?.remoteJidAlt),
+    participant: maskJid(key?.participant),
+    participantAlt: maskJid(key?.participantAlt),
+  };
+}
+
+function summarizeDevice(device = {}) {
+  const user = String(device?.user || "");
+  const suffix = user.length > 4 ? user.slice(-4) : user;
+
+  return {
+    user: suffix ? `***${suffix}` : null,
+    device: device?.device ?? null,
+  };
 }
 
 function extractMessageContent(message) {
@@ -115,9 +168,14 @@ export class WhatsAppManager {
     const messageId = String(key?.id || "");
     if (!messageId) return undefined;
 
+    diag("RETRY_REQUEST", summarizeKey(key));
+
     const cached = this.outboundMessageCache.get(messageId);
     if (cached) {
-      console.log(`[WHATSAPP][RETRY] Mensagem ${messageId} recuperada do cache.`);
+      diag("RETRY_CACHE_HIT", {
+        id: messageId,
+        messageKeys: Object.keys(cached || {}),
+      });
       return cached;
     }
 
@@ -126,7 +184,10 @@ export class WhatsAppManager {
         const stored = await this.messageStore.getRetryContentByWhatsAppId(messageId);
         if (stored) {
           this.cacheOutboundMessage(messageId, stored);
-          console.log(`[WHATSAPP][RETRY] Mensagem ${messageId} recuperada do PostgreSQL.`);
+          diag("RETRY_DB_HIT", {
+            id: messageId,
+            messageKeys: Object.keys(stored || {}),
+          });
           return stored;
         }
       } catch (error) {
@@ -134,7 +195,7 @@ export class WhatsAppManager {
       }
     }
 
-    console.log(`[WHATSAPP][RETRY] Conteúdo não encontrado para ${messageId}.`);
+    diag("RETRY_MISS", { id: messageId });
     return undefined;
   }
 
@@ -226,9 +287,23 @@ export class WhatsAppManager {
 
     this.socket = sock;
 
+    diag("SOCKET_CREATED", {
+      sessionId: this.authStore.sessionId,
+      configuredMeId: maskJid(state?.creds?.me?.id),
+      configuredMeLid: maskJid(state?.creds?.me?.lid),
+    });
+
     sock.ev.on("creds.update", async () => {
       try { await saveCreds(); }
       catch (error) { console.error("[WHATSAPP][CREDS]", error.message); }
+    });
+
+    // Baileys 6.7.24 expõe especificamente este evento para mapear LID <-> número.
+    sock.ev.on("chats.phoneNumberShare", ({ lid, jid }) => {
+      diag("PN_LID_MAPPING", {
+        lid: maskJid(lid),
+        jid: maskJid(jid),
+      });
     });
 
     sock.ev.on("connection.update", async (update) => {
@@ -255,6 +330,12 @@ export class WhatsAppManager {
         const phone = sanitizePhone(sock.user?.id);
         const displayName = sock.user?.name || null;
         await this.setStatus("CONNECTED", { phone, displayName, lastConnectedAt: now, lastDisconnectReason: null });
+
+        diag("CONNECTION_OPEN", {
+          socketUserId: maskJid(sock.user?.id),
+          socketUserLid: maskJid(sock.user?.lid),
+          displayName: displayName || null,
+        });
         console.log("[WHATSAPP] Conectado.");
       }
 
@@ -263,6 +344,12 @@ export class WhatsAppManager {
         const statusCode = extractStatusCode(lastDisconnect?.error);
         const loggedOut = statusCode === DisconnectReason.loggedOut;
         this.socket = null;
+
+        diag("CONNECTION_CLOSE", {
+          statusCode,
+          loggedOut,
+          error: lastDisconnect?.error?.message || null,
+        });
 
         if (loggedOut) {
           console.log("[WHATSAPP] Sessão desconectada pelo WhatsApp.");
@@ -288,7 +375,18 @@ export class WhatsAppManager {
       }
     });
 
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    sock.ev.on("messages.upsert", async ({ messages, type, requestId }) => {
+      // Diagnóstico ocorre ANTES dos filtros atuais; não altera a persistência.
+      for (const message of messages || []) {
+        diag("MESSAGE_UPSERT", {
+          type,
+          requestId: requestId || null,
+          key: summarizeKey(message?.key),
+          messageKeys: Object.keys(message?.message || {}),
+          status: message?.status ?? null,
+        });
+      }
+
       if (type !== "notify") return;
 
       for (const message of messages || []) {
@@ -326,6 +424,15 @@ export class WhatsAppManager {
     });
 
     sock.ev.on("messages.update", async (updates) => {
+      for (const item of updates || []) {
+        diag("MESSAGE_UPDATE", {
+          key: summarizeKey(item?.key),
+          statusRaw: item?.update?.status ?? null,
+          statusMapped: mapDeliveryStatus(item?.update?.status),
+          updateKeys: Object.keys(item?.update || {}),
+        });
+      }
+
       if (!this.messageStore) return;
 
       for (const item of updates || []) {
@@ -341,7 +448,69 @@ export class WhatsAppManager {
       }
     });
 
+    sock.ev.on("message-receipt.update", (updates) => {
+      for (const item of updates || []) {
+        diag("MESSAGE_RECEIPT", {
+          key: summarizeKey(item?.key),
+          receiptCount: Array.isArray(item?.receipt) ? item.receipt.length : null,
+          receipts: Array.isArray(item?.receipt)
+            ? item.receipt.slice(0, 10).map((receipt) => ({
+                userJid: maskJid(receipt?.userJid),
+                receiptTimestamp: receipt?.receiptTimestamp ?? null,
+                readTimestamp: receipt?.readTimestamp ?? null,
+                playedTimestamp: receipt?.playedTimestamp ?? null,
+              }))
+            : null,
+        });
+      }
+    });
+
     return this.getAdminStatus();
+  }
+
+  async collectPostSendDiagnostics(remoteJid, messageId) {
+    if (!this.socket) return;
+
+    try {
+      if (typeof this.socket.onWhatsApp === "function") {
+        const result = await this.socket.onWhatsApp(remoteJid);
+        diag("ON_WHATSAPP_AFTER_SEND", {
+          messageId,
+          requestedRemoteJid: maskJid(remoteJid),
+          results: Array.isArray(result)
+            ? result.map((item) => ({
+                exists: Boolean(item?.exists),
+                jid: maskJid(item?.jid),
+              }))
+            : result,
+        });
+      }
+    } catch (error) {
+      diag("ON_WHATSAPP_ERROR", {
+        messageId,
+        error: error?.message || String(error),
+      });
+    }
+
+    try {
+      if (typeof this.socket.getUSyncDevices === "function") {
+        // Executado SOMENTE depois do sendMessage, para não interferir no envio testado.
+        const devices = await this.socket.getUSyncDevices([remoteJid], false, false);
+        diag("USYNC_DEVICES_AFTER_SEND", {
+          messageId,
+          requestedRemoteJid: maskJid(remoteJid),
+          count: Array.isArray(devices) ? devices.length : null,
+          devices: Array.isArray(devices) ? devices.map(summarizeDevice) : null,
+        });
+      } else {
+        diag("USYNC_UNAVAILABLE", { messageId });
+      }
+    } catch (error) {
+      diag("USYNC_ERROR", {
+        messageId,
+        error: error?.message || String(error),
+      });
+    }
   }
 
   async sendText({ remoteJid, text }) {
@@ -351,11 +520,29 @@ export class WhatsAppManager {
       throw error;
     }
 
+    diag("SEND_BEGIN", {
+      requestedRemoteJid: maskJid(remoteJid),
+      socketUserId: maskJid(this.socket.user?.id),
+      socketUserLid: maskJid(this.socket.user?.lid),
+      textLength: String(text || "").length,
+    });
+
     const result = await this.socket.sendMessage(remoteJid, { text });
 
     if (result?.key?.id && result?.message) {
       this.cacheOutboundMessage(result.key.id, result.message);
     }
+
+    diag("SEND_RESULT", {
+      key: summarizeKey(result?.key),
+      messageKeys: Object.keys(result?.message || {}),
+      messageTimestamp: result?.messageTimestamp ?? null,
+      status: result?.status ?? null,
+    });
+
+    // Importante: diagnóstico de resolução PN/LID/dispositivos é feito APÓS o envio.
+    // Assim o teste mede o mesmo sendMessage que já estávamos usando.
+    await this.collectPostSendDiagnostics(remoteJid, result?.key?.id || null);
 
     return {
       id: result?.key?.id || null,
