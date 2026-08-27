@@ -1,12 +1,12 @@
 {
   "name": "mek-cloud-mobile",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "description": "MEK Cloud Mobile - WhatsApp Engine com Messaging API, idempotência e histórico PostgreSQL",
   "scripts": {
-    "start": "node --import ./lid-hotfix.js server.js",
-    "check": "node --check server.js && node --check db.js && node --check auth-store.js && node --check whatsapp.js && node --check message-store.js && node --check lid-hotfix.js"
+    "start": "node --import ./single-session-hotfix.js --import ./lid-hotfix.js server.js",
+    "check": "node --check server.js && node --check db.js && node --check auth-store.js && node --check whatsapp.js && node --check message-store.js && node --check lid-hotfix.js && node --check single-session-hotfix.js"
   },
   "engines": {
     "node": ">=20"

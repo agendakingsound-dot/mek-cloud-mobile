@@ -10,9 +10,10 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 # Arquivos da aplicação.
-# O lid-hotfix.js precisa existir em /app porque o package.json inicia com:
-# node --import ./lid-hotfix.js server.js
-COPY server.js db.js auth-store.js whatsapp.js message-store.js lid-hotfix.js ./
+# Hotfixes carregados pelo package.json antes do server.js:
+# - single-session-hotfix.js: lock exclusivo da sessão WhatsApp no PostgreSQL
+# - lid-hotfix.js: diagnóstico PN/LID mantendo envio pelo PN original
+COPY server.js db.js auth-store.js whatsapp.js message-store.js lid-hotfix.js single-session-hotfix.js ./
 
 ENV NODE_ENV=production
 ENV PORT=8080
