@@ -1,18 +1,18 @@
 {
   "name": "mek-cloud-mobile",
-  "version": "0.3.5",
+  "version": "0.4.0-alpha.1",
   "private": true,
   "type": "module",
-  "description": "MEK Cloud Mobile - WhatsApp Engine com Messaging API, idempotência e histórico PostgreSQL",
+  "description": "MEK Cloud Mobile v0.4.0 experimental - Baileys v7 com roteamento PN/LID nativo, idempotencia e historico PostgreSQL",
   "scripts": {
-    "start": "node --import ./single-session-hotfix.js --import ./lid-hotfix.js server.js",
-    "check": "node --check server.js && node --check db.js && node --check auth-store.js && node --check whatsapp.js && node --check message-store.js && node --check lid-hotfix.js && node --check single-session-hotfix.js"
+    "start": "node --import ./single-session-hotfix.js server.js",
+    "check": "node --check server.js && node --check db.js && node --check auth-store.js && node --check whatsapp.js && node --check message-store.js && node --check single-session-hotfix.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.24",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "express": "^5.1.0",
     "pg": "^8.16.3",
     "pino": "^9.9.0",
