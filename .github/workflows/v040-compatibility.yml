@@ -1,0 +1,54 @@
+name: MEK v0.4.0 Compatibility Check
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experimental/v0.4.0-lid-native
+
+jobs:
+  compatibility-check:
+    name: Baileys v7 Compatibility
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código da branch
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Mostrar versões
+        run: |
+          node --version
+          npm --version
+
+      - name: Instalar dependências
+        run: npm install --omit=dev
+
+      - name: Confirmar versão do Baileys
+        run: npm ls @whiskeysockets/baileys
+
+      - name: Verificar sintaxe dos arquivos MEK
+        run: npm run check
+
+      - name: Testar importação do whatsapp.js
+        run: |
+          node -e "import('./whatsapp.js').then(() => console.log('WHATSAPP.JS IMPORT OK'))"
+
+      - name: Testar importação do auth-store.js
+        run: |
+          node -e "import('./auth-store.js').then(() => console.log('AUTH-STORE.JS IMPORT OK'))"
+
+      - name: Testar Single Session Lock
+        run: |
+          node -e "import('./single-session-hotfix.js').then(() => console.log('SINGLE SESSION IMPORT OK'))"
+
+      - name: Resultado
+        run: |
+          echo "======================================"
+          echo "MEK CLOUD MOBILE v0.4.0"
+          echo "COMPATIBILITY CHECK CONCLUIDO"
+          echo "======================================"
