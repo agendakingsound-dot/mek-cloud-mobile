@@ -1,0 +1,64 @@
+name: MEK v0.4.0 Docker Check
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experimental/v0.4.0-lid-native
+
+jobs:
+  docker-check:
+    name: Docker + Baileys v7
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código da branch
+        uses: actions/checkout@v4
+
+      - name: Mostrar Docker
+        run: |
+          docker --version
+
+      - name: Construir imagem MEK v0.4.0
+        run: |
+          docker build --no-cache -t mek-cloud-mobile:v040-test .
+
+      - name: Conferir metadados da imagem
+        run: |
+          docker image inspect mek-cloud-mobile:v040-test \
+            --format='User={{.Config.User}} | Workdir={{.Config.WorkingDir}} | Cmd={{json .Config.Cmd}}'
+
+      - name: Confirmar Node e npm dentro do container
+        run: |
+          docker run --rm --entrypoint node mek-cloud-mobile:v040-test --version
+          docker run --rm --entrypoint npm mek-cloud-mobile:v040-test --version
+
+      - name: Confirmar Baileys v7 dentro da imagem
+        run: |
+          docker run --rm --entrypoint npm mek-cloud-mobile:v040-test ls @whiskeysockets/baileys
+
+      - name: Verificar sintaxe dentro da imagem
+        run: |
+          docker run --rm --entrypoint npm mek-cloud-mobile:v040-test run check
+
+      - name: Testar importação do whatsapp.js dentro da imagem
+        run: |
+          docker run --rm --entrypoint node mek-cloud-mobile:v040-test \
+            -e "import('./whatsapp.js').then(() => console.log('WHATSAPP.JS DOCKER IMPORT OK'))"
+
+      - name: Testar importação do auth-store.js dentro da imagem
+        run: |
+          docker run --rm --entrypoint node mek-cloud-mobile:v040-test \
+            -e "import('./auth-store.js').then(() => console.log('AUTH-STORE.JS DOCKER IMPORT OK'))"
+
+      - name: Testar Single Session Lock dentro da imagem
+        run: |
+          docker run --rm --entrypoint node mek-cloud-mobile:v040-test \
+            -e "import('./single-session-hotfix.js').then(() => console.log('SINGLE SESSION DOCKER IMPORT OK'))"
+
+      - name: Resultado
+        run: |
+          echo "======================================"
+          echo "MEK CLOUD MOBILE v0.4.0"
+          echo "DOCKER + BAILEYS v7 CHECK CONCLUIDO"
+          echo "======================================"
