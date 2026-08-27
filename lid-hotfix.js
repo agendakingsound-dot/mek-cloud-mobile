@@ -1,10 +1,11 @@
 import { USyncQuery, USyncUser } from "@whiskeysockets/baileys";
 import { WhatsAppManager } from "./whatsapp.js";
 
-// MEK Cloud Mobile v0.3.3 - LID Routing Hotfix
+// MEK Cloud Mobile v0.3.4 - PN Passthrough Diagnostic Hotfix
 // Mantém o núcleo v0.3.2 intacto e intercepta apenas o envio de texto.
-// Números PN (@s.whatsapp.net) são resolvidos para o LID correspondente
-// antes do sendMessage, evitando criptografia Signal no identificador legado.
+// O LID continua sendo consultado para diagnóstico, mas NÃO substitui o PN
+// (@s.whatsapp.net) no sendMessage. Assim, o Baileys recebe o JID original
+// e fica responsável por resolver dispositivos/sessões Signal internamente.
 
 const LID_CACHE_TTL_MS = 30 * 60 * 1000;
 const lidCacheByManager = new WeakMap();
@@ -55,9 +56,9 @@ function getManagerCache(manager) {
   return cache;
 }
 
-async function resolveLid(manager, remoteJid) {
+async function resolveLidForDiagnostic(manager, remoteJid) {
   if (!isPhoneJid(remoteJid)) {
-    return { routedJid: remoteJid, source: "already_non_pn" };
+    return { lidJid: null, source: "not_pn" };
   }
 
   const cache = getManagerCache(manager);
@@ -67,15 +68,13 @@ async function resolveLid(manager, remoteJid) {
     console.log(
       `[LID-HOTFIX][CACHE_HIT] ${maskJid(remoteJid)} -> ${maskJid(cached.lidJid)}`
     );
-    return { routedJid: cached.lidJid, source: "cache" };
+    return { lidJid: cached.lidJid, source: "cache" };
   }
 
   if (cached) cache.delete(remoteJid);
 
   if (!manager.socket || typeof manager.socket.executeUSyncQuery !== "function") {
-    const error = new Error("Socket atual não expõe executeUSyncQuery para resolução LID.");
-    error.code = "LID_RESOLUTION_UNAVAILABLE";
-    throw error;
+    return { lidJid: null, source: "usync_unavailable" };
   }
 
   const query = new USyncQuery()
@@ -83,72 +82,74 @@ async function resolveLid(manager, remoteJid) {
     .withContext("background")
     .withUser(new USyncUser().withId(remoteJid));
 
-  let result;
   try {
-    result = await manager.socket.executeUSyncQuery(query);
-  } catch (cause) {
-    console.error(
-      `[LID-HOTFIX][USYNC_ERROR] ${maskJid(remoteJid)}: ${cause?.message || String(cause)}`
+    const result = await manager.socket.executeUSyncQuery(query);
+    const list = Array.isArray(result?.list) ? result.list : [];
+    const item =
+      list.find((entry) => entry?.id === remoteJid && entry?.lid) ||
+      list.find((entry) => entry?.lid) ||
+      null;
+
+    const lidJid = normalizeLidJid(item?.lid);
+
+    console.log(
+      `[LID-HOTFIX][USYNC_RESULT] requested=${maskJid(remoteJid)} entries=${list.length} ` +
+        `resolved=${maskJid(lidJid) || "NONE"}`
     );
-    const error = new Error("Falha ao consultar o LID do destinatário no WhatsApp.");
-    error.code = "LID_RESOLUTION_FAILED";
-    error.cause = cause;
-    throw error;
+
+    if (lidJid) {
+      cache.set(remoteJid, {
+        lidJid,
+        expiresAt: Date.now() + LID_CACHE_TTL_MS,
+      });
+    }
+
+    return {
+      lidJid,
+      source: lidJid ? "usync" : "not_found",
+    };
+  } catch (error) {
+    console.error(
+      `[LID-HOTFIX][USYNC_DIAG_ERROR] ${maskJid(remoteJid)}: ${error?.message || String(error)}`
+    );
+
+    // v0.3.4: USync é apenas diagnóstico. Uma falha aqui NÃO bloqueia o envio.
+    return { lidJid: null, source: "usync_error" };
   }
-
-  const list = Array.isArray(result?.list) ? result.list : [];
-  const item =
-    list.find((entry) => entry?.id === remoteJid && entry?.lid) ||
-    list.find((entry) => entry?.lid) ||
-    null;
-
-  const lidJid = normalizeLidJid(item?.lid);
-
-  console.log(
-    `[LID-HOTFIX][USYNC_RESULT] requested=${maskJid(remoteJid)} entries=${list.length} ` +
-      `resolved=${maskJid(lidJid) || "NONE"}`
-  );
-
-  if (!lidJid) {
-    const error = new Error("O WhatsApp não retornou um LID válido para o destinatário.");
-    error.code = "LID_NOT_FOUND";
-    throw error;
-  }
-
-  cache.set(remoteJid, {
-    lidJid,
-    expiresAt: Date.now() + LID_CACHE_TTL_MS,
-  });
-
-  return { routedJid: lidJid, source: "usync" };
 }
 
 const originalSendText = WhatsAppManager.prototype.sendText;
 
-WhatsAppManager.prototype.sendText = async function sendTextWithLidRouting({ remoteJid, text }) {
+WhatsAppManager.prototype.sendText = async function sendTextWithPnPassthrough({ remoteJid, text }) {
   // Preserva exatamente o tratamento original de estado/desconexão.
   if (this.status !== "CONNECTED" || !this.socket) {
     return originalSendText.call(this, { remoteJid, text });
   }
 
   const requestedRemoteJid = remoteJid;
-  const { routedJid, source } = await resolveLid(this, requestedRemoteJid);
+  const diagnostic = await resolveLidForDiagnostic(this, requestedRemoteJid);
 
   console.log(
-    `[LID-HOTFIX][ROUTE] source=${source} ${maskJid(requestedRemoteJid)} -> ${maskJid(routedJid)}`
+    `[LID-HOTFIX][PN_PASSTHROUGH] requested=${maskJid(requestedRemoteJid)} ` +
+      `discoveredLid=${maskJid(diagnostic.lidJid) || "NONE"} source=${diagnostic.source} ` +
+      `sendTo=${maskJid(requestedRemoteJid)}`
   );
 
+  // PONTO CENTRAL DA v0.3.4:
+  // enviamos para o PN original, não para o LID descoberto por USync.
   const result = await originalSendText.call(this, {
-    remoteJid: routedJid,
+    remoteJid: requestedRemoteJid,
     text,
   });
 
   return {
     ...result,
     requestedRemoteJid,
-    routedRemoteJid: routedJid,
-    lidRouting: source,
+    routedRemoteJid: requestedRemoteJid,
+    discoveredLidJid: diagnostic.lidJid,
+    lidRouting: "pn_passthrough",
+    lidDiagnosticSource: diagnostic.source,
   };
 };
 
-console.log("[MEK] v0.3.3 LID Routing Hotfix carregado.");
+console.log("[MEK] v0.3.4 PN Passthrough Diagnostic Hotfix carregado.");
