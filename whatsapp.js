@@ -1,11 +1,38 @@
 import makeWASocket, {
   Browsers,
   DisconnectReason,
+  makeCacheableSignalKeyStore,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import QRCode from "qrcode";
 
 const logger = pino({ level: "silent" });
+
+class SimpleCache {
+  constructor() {
+    this.map = new Map();
+  }
+
+  get(key) {
+    return this.map.get(key);
+  }
+
+  set(key, value) {
+    this.map.set(key, value);
+    return true;
+  }
+
+  del(key) {
+    return this.map.delete(key);
+  }
+
+  flushAll() {
+    this.map.clear();
+  }
+}
+
+// Mantido fora do socket para evitar loops de retry em reconexões.
+const msgRetryCounterCache = new SimpleCache();
 
 function extractStatusCode(error) {
   return (
@@ -66,6 +93,49 @@ export class WhatsAppManager {
     this.lastDisconnectReason = null;
     this.qrDataUrl = null;
     this.qrGeneratedAt = null;
+
+    // Cache das mensagens recém-enviadas para atender retry de descriptografia.
+    this.outboundMessageCache = new Map();
+    this.maxOutboundCacheItems = 500;
+  }
+
+  cacheOutboundMessage(messageId, content) {
+    if (!messageId || !content) return;
+
+    this.outboundMessageCache.set(String(messageId), content);
+
+    while (this.outboundMessageCache.size > this.maxOutboundCacheItems) {
+      const oldestKey = this.outboundMessageCache.keys().next().value;
+      if (!oldestKey) break;
+      this.outboundMessageCache.delete(oldestKey);
+    }
+  }
+
+  async getMessageForRetry(key) {
+    const messageId = String(key?.id || "");
+    if (!messageId) return undefined;
+
+    const cached = this.outboundMessageCache.get(messageId);
+    if (cached) {
+      console.log(`[WHATSAPP][RETRY] Mensagem ${messageId} recuperada do cache.`);
+      return cached;
+    }
+
+    if (this.messageStore) {
+      try {
+        const stored = await this.messageStore.getRetryContentByWhatsAppId(messageId);
+        if (stored) {
+          this.cacheOutboundMessage(messageId, stored);
+          console.log(`[WHATSAPP][RETRY] Mensagem ${messageId} recuperada do PostgreSQL.`);
+          return stored;
+        }
+      } catch (error) {
+        console.error("[WHATSAPP][RETRY_STORE]", error.message);
+      }
+    }
+
+    console.log(`[WHATSAPP][RETRY] Conteúdo não encontrado para ${messageId}.`);
+    return undefined;
   }
 
   async initialize() {
@@ -141,12 +211,17 @@ export class WhatsAppManager {
     const { state, saveCreds } = await this.authStore.load();
 
     const sock = makeWASocket({
-      auth: state,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
+      },
       logger,
       browser: Browsers.ubuntu("Chrome"),
       markOnlineOnConnect: false,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
+      msgRetryCounterCache,
+      getMessage: async (key) => this.getMessageForRetry(key),
     });
 
     this.socket = sock;
@@ -197,7 +272,12 @@ export class WhatsAppManager {
           this.phone = null;
           this.displayName = null;
           this.lastConnectedAt = null;
-          await this.setStatus("LOGGED_OUT", { phone: null, displayName: null, lastConnectedAt: null, lastDisconnectReason: "LOGGED_OUT" });
+          await this.setStatus("LOGGED_OUT", {
+            phone: null,
+            displayName: null,
+            lastConnectedAt: null,
+            lastDisconnectReason: "LOGGED_OUT",
+          });
           return;
         }
 
@@ -273,6 +353,10 @@ export class WhatsAppManager {
 
     const result = await this.socket.sendMessage(remoteJid, { text });
 
+    if (result?.key?.id && result?.message) {
+      this.cacheOutboundMessage(result.key.id, result.message);
+    }
+
     return {
       id: result?.key?.id || null,
       remoteJid: result?.key?.remoteJid || remoteJid,
@@ -287,6 +371,8 @@ export class WhatsAppManager {
     ++this.generation;
     const sock = this.socket;
     this.socket = null;
+    this.outboundMessageCache.clear();
+    msgRetryCounterCache.flushAll();
 
     if (sock) {
       try { await sock.logout(); }
@@ -298,7 +384,12 @@ export class WhatsAppManager {
     this.displayName = null;
     this.lastConnectedAt = null;
     this.lastDisconnectReason = null;
-    await this.setStatus("DISCONNECTED", { phone: null, displayName: null, lastConnectedAt: null, lastDisconnectReason: null });
+    await this.setStatus("DISCONNECTED", {
+      phone: null,
+      displayName: null,
+      lastConnectedAt: null,
+      lastDisconnectReason: null,
+    });
     return this.getAdminStatus();
   }
 
@@ -323,6 +414,10 @@ export class WhatsAppManager {
   }
 
   getQr() {
-    return { available: Boolean(this.qrDataUrl), dataUrl: this.qrDataUrl, generatedAt: this.qrGeneratedAt };
+    return {
+      available: Boolean(this.qrDataUrl),
+      dataUrl: this.qrDataUrl,
+      generatedAt: this.qrGeneratedAt,
+    };
   }
 }

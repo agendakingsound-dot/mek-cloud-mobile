@@ -128,6 +128,28 @@ export class MessageStore {
     return result.rows[0] || null;
   }
 
+  async getRetryContentByWhatsAppId(whatsappMessageId) {
+    if (!whatsappMessageId) return null;
+
+    const result = await this.pool.query(
+      `SELECT message_type, content
+       FROM mek_whatsapp_messages
+       WHERE whatsapp_message_id = $1
+         AND direction = 'OUTBOUND'
+       LIMIT 1`,
+      [whatsappMessageId]
+    );
+
+    const row = result.rows[0];
+    if (!row) return null;
+
+    if (row.message_type === "TEXT" && row.content) {
+      return { conversation: row.content };
+    }
+
+    return null;
+  }
+
   async list({ phone = null, direction = null, limit = 50 } = {}) {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
     const values = [];

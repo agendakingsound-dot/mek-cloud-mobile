@@ -1,0 +1,26 @@
+MEK CLOUD MOBILE v0.3.1 - HOTFIX MESSAGE RETRY
+
+Substituir no repositório:
+- whatsapp.js
+- message-store.js
+
+Não alterar:
+- server.js
+- db.js
+- auth-store.js
+- package.json
+- tokens/secrets
+- sessão PostgreSQL
+
+Commit:
+Hotfix v0.3.1 - WhatsApp message retry
+
+O hotfix adiciona:
+- makeCacheableSignalKeyStore
+- msgRetryCounterCache
+- getMessage para retry
+- cache das mensagens enviadas
+- recuperação do conteúdo pelo PostgreSQL
+
+Depois do deploy, NÃO reparear o WhatsApp.
+Faça um novo envio com requestId novo e confirme no aparelho destinatário.
